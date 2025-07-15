@@ -12,12 +12,16 @@ from ..schemas.usuario_schema import (
     UserResponse,
     LoginResponse,
     UserListItem,
+    EmailConfirmation,
+    ResendConfirmation,
+    RegisterResponse,
 )
 from ..utils.auth_dependencies import (
     get_current_active_user,
     require_admin,
+    require_admin_or_self,
 )
-from ..models.usuario import AuthUser
+from ..models.usuario import User
 
 # Crear router
 router = APIRouter(
@@ -28,22 +32,54 @@ router = APIRouter(
 
 
 @router.post(
-    "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
+    "/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED
 )
 def register_user(
     user: UserCreate,
     db: Session = Depends(get_db),
-    # current_user: AuthUser = Depends(require_admin)  # Solo admins pueden crear usuarios
+    # current_user: User = Depends(require_admin)  # Comentado para permitir registro libre
 ):
-    """Crear un nuevo usuario (requiere permisos de admin)"""
+    """Crear un nuevo usuario y enviar email de confirmación"""
     controller = AuthController(db)
     new_user = controller.create_user(user)
-    return new_user
+    return RegisterResponse(
+        message="Usuario registrado exitosamente. Revisa tu email para confirmar tu cuenta.",
+        user=new_user,
+        confirmation_required=True,
+    )
+
+
+@router.post("/confirm-email", response_model=UserResponse)
+def confirm_email(confirmation_data: EmailConfirmation, db: Session = Depends(get_db)):
+    """Confirmar email del usuario con token alfanumérico"""
+    controller = AuthController(db)
+    confirmed_user = controller.confirm_email(confirmation_data)
+    return confirmed_user
+
+
+@router.post("/resend-confirmation")
+def resend_confirmation_email(
+    resend_data: ResendConfirmation, db: Session = Depends(get_db)
+):
+    """Reenviar email de confirmación"""
+    controller = AuthController(db)
+    success = controller.resend_confirmation_email(resend_data)
+
+    if success:
+        return {
+            "message": "Email de confirmación enviado. Revisa tu bandeja de entrada.",
+            "success": True,
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error enviando email de confirmación. Intenta más tarde.",
+        )
 
 
 @router.post("/login", response_model=LoginResponse)
 def login(login_data: UserLogin, db: Session = Depends(get_db)):
-    """Iniciar sesión y obtener token"""
+    """Iniciar sesión y obtener token (requiere email confirmado)"""
     controller = AuthController(db)
     user, access_token = controller.authenticate_user(login_data)
 
@@ -53,7 +89,7 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
 
 
 @router.get("/profile", response_model=UserResponse)
-def get_my_profile(current_user: AuthUser = Depends(get_current_active_user)):
+def get_my_profile(current_user: User = Depends(get_current_active_user)):
     """Obtener mi perfil actual"""
     return current_user
 
@@ -62,11 +98,9 @@ def get_my_profile(current_user: AuthUser = Depends(get_current_active_user)):
 def get_user_profile(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(
-        require_admin
-    ),  # Solo admins pueden ver otros perfiles
+    current_user: User = Depends(require_admin_or_self(id)),
 ):
-    """Obtener perfil de cualquier usuario (solo admins)"""
+    """Obtener perfil de usuario (solo admins o el mismo usuario)"""
     controller = AuthController(db)
     user = controller.get_user_profile(user_id)
     return user
@@ -76,7 +110,7 @@ def get_user_profile(
 def change_my_password(
     password_data: PasswordUpdate,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """Cambiar mi contraseña"""
     controller = AuthController(db)
@@ -88,41 +122,21 @@ def change_my_password(
 def list_users(
     skip: int = Query(0, ge=0, description="Registros a omitir"),
     limit: int = Query(100, ge=1, le=1000, description="Límite de registros"),
-    is_active: Optional[bool] = Query(None, description="Filtrar por usuarios activos"),
+    role: Optional[str] = Query(None, description="Filtrar por rol (admin, client, artist)"),
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(
-        require_admin
-    ),  # Solo admins pueden listar usuarios
+    current_user: User = Depends(require_admin),  # Solo admins pueden listar usuarios
 ):
     """Listar todos los usuarios (solo admins)"""
     controller = AuthController(db)
-    users = controller.get_all_users(skip=skip, limit=limit, is_active=is_active)
+    users = controller.get_all_users(skip=skip, limit=limit, role=role)
     return users
-
-
-@router.patch("/users/{user_id}/deactivate", response_model=UserResponse)
-def deactivate_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(require_admin),
-):
-    """Desactivar usuario (solo admins)"""
-    if user_id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No puedes desactivarte a ti mismo",
-        )
-
-    controller = AuthController(db)
-    deactivated_user = controller.deactivate_user(user_id)
-    return deactivated_user
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     """Eliminar usuario permanentemente (solo admins)"""
     if user_id == current_user.id:
@@ -136,16 +150,73 @@ def delete_user(
     return None
 
 
-# Endpoint para verificar permisos específicos
-@router.get("/check-permission/{permission}")
-def check_permission(
-    permission: str, current_user: AuthUser = Depends(get_current_active_user)
-):
-    """Verificar si el usuario actual tiene un permiso específico"""
-    has_permission = current_user.has_permission(permission)
+@router.get("/check-role")
+def check_my_role(current_user: User = Depends(get_current_active_user)):
+    """Verificar mi rol actual"""
     return {
         "user_id": current_user.id,
-        "username": current_user.username,
-        "permission": permission,
-        "has_permission": has_permission,
+        "email": current_user.email,
+        "name": current_user.name,
+        "last_name": current_user.last_name,
+        "role": current_user.role.value,
+        "email_confirmed": current_user.email_confirmed,
+    }
+
+
+@router.get("/confirmation-status/{user_id}")
+def get_confirmation_status(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_self(id)),
+):
+    """Verificar estado de confirmación de email"""
+    controller = AuthController(db)
+    user = controller.get_user_profile(user_id)
+
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "last_name": user.last_name,
+        "email_confirmed": user.email_confirmed,
+        "confirmation_sent_at": user.confirmation_sent_at,
+        "role": user.role.value,
+    }
+
+
+# Nueva ruta para cambiar rol (solo admins)
+@router.patch("/users/{user_id}/role")
+def change_user_role(
+    user_id: int,
+    new_role: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Cambiar rol de usuario (solo admins)"""
+    if new_role not in ["admin", "client", "artist"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Rol inválido. Roles válidos: admin, client, artist"
+        )
+    
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No puedes cambiar tu propio rol",
+        )
+
+    controller = AuthController(db)
+    user = controller.get_user_profile(user_id)
+    
+    # Actualizar rol
+    from ..models.usuario import UserRole
+    user.role = UserRole(new_role)
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "message": f"Rol actualizado a {new_role}",
+        "user_id": user.id,
+        "email": user.email,
+        "new_role": user.role.value
     }

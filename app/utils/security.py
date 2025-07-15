@@ -1,11 +1,7 @@
-from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 import os
-
-# Configuración de hashing de contraseñas
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Configuración JWT
 SECRET_KEY = os.getenv(
@@ -13,16 +9,6 @@ SECRET_KEY = os.getenv(
 )  # En producción usar una clave segura
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE = int(os.getenv("ACCESS_TOKEN_EXPIRE", "30"))
-
-
-def hash_password(password: str) -> str:
-    """Hashear contraseña usando bcrypt"""
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verificar contraseña comparando con hash"""
-    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -34,7 +20,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     else:
         expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE)
 
-    # ✅ CORRECCIÓN: Convertir user_id a string para el campo 'sub'
+    # Convertir user_id a string para el campo 'sub'
     if "sub" in to_encode and isinstance(to_encode["sub"], int):
         to_encode["sub"] = str(to_encode["sub"])
 
@@ -57,14 +43,21 @@ def extract_user_from_token(token: str) -> Optional[dict]:
     """Extraer información del usuario desde el token"""
     payload = verify_token(token)
     if payload is None:
+        print("Payload es None")  # Debug
         return None
 
+    # Extraer datos del token
     user_id_str = payload.get("sub")
-    username = payload.get("username")
-    permissions = payload.get("permissions", [])
+    email = payload.get("email")
+    role = payload.get("role")
+
+    print(
+        f"Datos extraidos del token - user_id_str: {user_id_str}, email: {email}, role: {role}"
+    )  # Debug
 
     # Validar y convertir user_id a entero
     if user_id_str is None:
+        print("user_id_str es None")  # Debug
         return None
 
     try:
@@ -73,4 +66,4 @@ def extract_user_from_token(token: str) -> Optional[dict]:
         print(f"No se pudo convertir user_id a entero: {user_id_str}")  # Debug
         return None
 
-    return {"user_id": user_id, "username": username, "permissions": permissions}
+    return {"user_id": user_id, "email": email, "role": role}

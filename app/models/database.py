@@ -1,7 +1,10 @@
-from sqlalchemy import create_engine, text  # Agregar text import
+from sqlalchemy import create_engine, text  
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
 import os
+
+load_dotenv()
 
 # Configuración de MySQL
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
@@ -9,6 +12,7 @@ MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = os.getenv("MYSQL_PORT", "3306")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "tatuajes")
+
 
 # URL de conexión a MySQL
 # Manejar contraseña vacía correctamente
@@ -46,7 +50,7 @@ def get_db():
 # Función para crear todas las tablas
 def create_tables():
     """Crear todas las tablas en la base de datos"""
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine) 
 
 
 # Función para verificar conexión
